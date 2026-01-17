@@ -10,7 +10,10 @@ import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader';
 import { PLYLoader } from 'three/examples/jsm/loaders/PLYLoader';
 
-// --- Components & UI ---
+// --- WebXR ---
+import { ARButton } from 'three/examples/jsm/webxr/ARButton';
+
+// --- UI ---
 import ControlPanel from './control-panel';
 import { Loader, AlertTriangle } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -18,157 +21,191 @@ import { useToast } from '@/hooks/use-toast';
 
 export default function ARView() {
     // --- Refs ---
+    const containerRef = useRef<HTMLDivElement>(null);
     const videoRef = useRef<HTMLVideoElement>(null);
     const canvasRef = useRef<HTMLCanvasElement>(null);
+    const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
     const sceneRef = useRef<THREE.Scene | null>(null);
     const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
-    const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
     const modelRef = useRef<THREE.Group | null>(null);
     
-    // Animation Loop Ref
-    const requestRef = useRef<number | null>(null);
-    // Strict Mode Guard
-    const isInit = useRef(false);
+    // Gestures
+    const touchStartRef = useRef<{ x: number; y: number } | null>(null);
+    const pinchDistanceRef = useRef<number | null>(null);
+    const initialScaleRef = useRef<number>(1);
+    const initialRotationRef = useRef<number>(0);
 
-    // --- State ---
+    // State
     const [scale, setScale] = useState(1);
     const [rotation, setRotation] = useState({ x: 0, y: 0, z: 0 });
     const [modelLoaded, setModelLoaded] = useState(false);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [cameraReady, setCameraReady] = useState(false);
-    
+    const [arSupported, setArSupported] = useState(false);
+
     const { toast } = useToast();
+    const isInit = useRef(false);
 
     // --- 1. Resize Handler ---
     const onResize = useCallback(() => {
-        if (cameraRef.current && rendererRef.current && videoRef.current) {
-            const displayWidth = videoRef.current.clientWidth;
-            const displayHeight = videoRef.current.clientHeight;
+        if (!containerRef.current || !rendererRef.current || !cameraRef.current) return;
+        
+        const width = containerRef.current.clientWidth;
+        const height = containerRef.current.clientHeight;
 
-            // Only resize if dimensions differ to save performance
-            if (canvasRef.current?.width !== displayWidth || canvasRef.current?.height !== displayHeight) {
-                rendererRef.current.setSize(displayWidth, displayHeight, false);
-                cameraRef.current.aspect = displayWidth / displayHeight;
-                cameraRef.current.updateProjectionMatrix();
-            }
-        }
+        cameraRef.current.aspect = width / height;
+        cameraRef.current.updateProjectionMatrix();
+        rendererRef.current.setSize(width, height, false);
     }, []);
 
-    // --- 2. Initialize Camera ---
+    // --- 2. Initialize Camera (Background Video) ---
     useEffect(() => {
-        const initCamera = async () => {
+        const startCamera = async () => {
+            if (!videoRef.current) return;
             try {
-                let stream;
-                // Try fetching the back camera (environment)
-                try {
-                    stream = await navigator.mediaDevices.getUserMedia({ 
-                        video: { facingMode: 'environment' } 
-                    });
-                } catch (e) {
-                    console.info("Environment camera failed, trying default user camera.", e);
-                    stream = await navigator.mediaDevices.getUserMedia({ video: true });
-                }
+                // Try environment (back) camera first
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: 'environment' } 
+                }).catch(() => {
+                    // Fallback to any camera
+                    return navigator.mediaDevices.getUserMedia({ video: true });
+                });
                 
-                if (videoRef.current) {
-                    videoRef.current.srcObject = stream;
-                    // wait for metadata to ensure video has dimensions
-                    videoRef.current.onloadedmetadata = () => {
-                        videoRef.current?.play().catch(e => console.error("Autoplay prevented", e));
-                        setCameraReady(true);
-                    };
-                }
+                videoRef.current.srcObject = stream;
+                // Wait for metadata to avoid black frame issues
+                videoRef.current.onloadedmetadata = () => {
+                    videoRef.current?.play().catch(e => console.warn("Autoplay blocked:", e));
+                };
             } catch (err) {
-                console.error("Error accessing camera: ", err);
-                setError("Could not access the camera. Please check browser permissions.");
+                console.error("Camera init failed:", err);
+                // Don't set error state immediately here, as WebXR might still work
+                // But generally for pass-through AR, we need camera.
             }
         };
-
-        initCamera();
-
-        // Clean up camera stream on unmount
+        startCamera();
+        
+        // Cleanup camera on unmount
         return () => {
             if (videoRef.current && videoRef.current.srcObject) {
-                const stream = videoRef.current.srcObject as MediaStream;
-                stream.getTracks().forEach(track => track.stop());
+                const tracks = (videoRef.current.srcObject as MediaStream).getTracks();
+                tracks.forEach(t => t.stop());
             }
         };
     }, []);
-    
-    // --- 3. Initialize Three.js Scene ---
-    useEffect(() => {
-        if (!cameraReady || !canvasRef.current || isInit.current) return;
-        
-        isInit.current = true; // Mark as initialized
 
+    // --- 3. Initialize Three.js + WebXR ---
+    useEffect(() => {
+        if (!canvasRef.current || !containerRef.current || isInit.current) return;
+        isInit.current = true;
+
+        // SCENE
         const scene = new THREE.Scene();
         sceneRef.current = scene;
 
-        const width = videoRef.current?.clientWidth || window.innerWidth;
-        const height = videoRef.current?.clientHeight || window.innerHeight;
-
-        const camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
-        camera.position.z = 5;
+        // CAMERA
+        const width = containerRef.current.clientWidth;
+        const height = containerRef.current.clientHeight;
+        const camera = new THREE.PerspectiveCamera(70, width / height, 0.01, 50);
+        camera.position.z = 3; 
         cameraRef.current = camera;
-        
+
+        // RENDERER
         const renderer = new THREE.WebGLRenderer({ 
-            canvas: canvasRef.current, 
-            alpha: true,           // Transparent background
-            antialias: true, 
-            preserveDrawingBuffer: true // Required for screenshots
+            canvas: canvasRef.current,
+            alpha: true, // Critical for seeing video behind canvas
+            antialias: true,
+            preserveDrawingBuffer: true 
+        });
+        renderer.setSize(width, height);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // Cap pixel ratio for performance
+        renderer.xr.enabled = true; // Enable WebXR
+        
+        // Shadow Setup
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        
+        // Color Management (Fixes dark/washed out colors)
+        renderer.outputColorSpace = THREE.SRGBColorSpace;
+        
+        rendererRef.current = renderer;
+
+        // LIGHTING
+        // 1. Hemisphere light (Sky/Ground) - ensures model is never pitch black
+        const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 1);
+        hemiLight.position.set(0, 20, 0);
+        scene.add(hemiLight);
+
+        // 2. Directional Light (Sun) - casts shadows
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
+        dirLight.position.set(3, 10, 5);
+        dirLight.castShadow = true;
+        dirLight.shadow.mapSize.width = 1024;
+        dirLight.shadow.mapSize.height = 1024;
+        dirLight.shadow.camera.near = 0.1;
+        dirLight.shadow.camera.far = 20;
+        scene.add(dirLight);
+
+        // SHADOW PLANE (Invisible catcher)
+        const shadowMat = new THREE.ShadowMaterial({ opacity: 0.4 });
+        const shadowPlane = new THREE.Mesh(new THREE.PlaneGeometry(100, 100), shadowMat);
+        shadowPlane.rotation.x = -Math.PI / 2;
+        shadowPlane.position.y = -0.5; // Sit slightly below default
+        shadowPlane.receiveShadow = true;
+        scene.add(shadowPlane);
+
+        // AR BUTTON
+        // We append it to our container so it's not hidden behind z-index layers
+        const arButton = ARButton.createButton(renderer, { 
+            requiredFeatures: ['hit-test'],
+            optionalFeatures: ['dom-overlay'],
+            domOverlay: { root: document.body } 
         });
         
-        renderer.setPixelRatio(window.devicePixelRatio);
-        renderer.setSize(width, height);
-        rendererRef.current = renderer;
+        // Style fixes for AR Button
+        arButton.style.position = 'absolute';
+        arButton.style.bottom = '24px'; // Move up slightly
+        arButton.style.left = '50%';
+        arButton.style.transform = 'translateX(-50%)';
+        arButton.style.zIndex = '50'; // Ensure it's on top of everything
+        arButton.style.width = 'auto';
+        arButton.style.padding = '10px 20px';
+        arButton.style.backgroundColor = 'white';
+        arButton.style.color = 'black';
+        arButton.style.borderRadius = '20px';
+        arButton.style.border = 'none';
+        arButton.style.fontWeight = 'bold';
         
-        // Lighting
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
-        scene.add(ambientLight);
+        containerRef.current.appendChild(arButton);
         
-        // Directional light attached to camera (headlamp effect)
-        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-        directionalLight.position.set(0, 0, 1);
-        camera.add(directionalLight);
-        scene.add(camera);
-        
-        // Animation Loop
-        const animate = () => {
-            if (rendererRef.current && sceneRef.current && cameraRef.current) {
-                rendererRef.current.render(sceneRef.current, cameraRef.current);
-            }
-            requestRef.current = requestAnimationFrame(animate);
-        };
-        animate();
-        onResize();
+        // Check if AR is actually supported to show specific UI hints if needed
+        if ('xr' in navigator) {
+            (navigator as any).xr.isSessionSupported('immersive-ar').then((supported: boolean) => {
+                setArSupported(supported);
+            });
+        }
 
+        // ANIMATION LOOP
+        // *IMPORTANT*: Use setAnimationLoop, NOT requestAnimationFrame
+        renderer.setAnimationLoop(() => {
+            renderer.render(scene, camera);
+        });
+
+        // Event Listeners
         window.addEventListener('resize', onResize);
 
-        // CLEANUP: Dispose Three.js objects
+        // Cleanup
         return () => {
             window.removeEventListener('resize', onResize);
-            if (requestRef.current !== null) cancelAnimationFrame(requestRef.current);
-            
-            if (sceneRef.current) {
-                sceneRef.current.traverse((object) => {
-                    if (object instanceof THREE.Mesh) {
-                        object.geometry.dispose();
-                        if (object.material instanceof THREE.Material) {
-                            object.material.dispose();
-                        } else if (Array.isArray(object.material)) {
-                            object.material.forEach((m: THREE.Material) => m.dispose());
-                        }
-                    }
-                });
+            renderer.setAnimationLoop(null);
+            if (arButton && arButton.parentNode) {
+                arButton.parentNode.removeChild(arButton);
             }
-            if (rendererRef.current) {
-                rendererRef.current.dispose();
-            }
+            renderer.dispose();
             isInit.current = false;
         };
-    }, [cameraReady, onResize]);
+    }, [onResize]);
 
-    // --- 4. Handle User Transformations (Scale/Rotation) ---
+    // --- 4. Model Sync ---
     useEffect(() => {
         if (modelRef.current) {
             modelRef.current.scale.set(scale, scale, scale);
@@ -180,217 +217,207 @@ export default function ARView() {
         }
     }, [scale, rotation]);
 
+    // --- 5. Touch Gestures ---
+    const handleTouchStart = (e: React.TouchEvent) => {
+        if (e.touches.length === 1) {
+            touchStartRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+            initialRotationRef.current = rotation.y;
+        } else if (e.touches.length === 2) {
+            const dx = e.touches[0].clientX - e.touches[1].clientX;
+            const dy = e.touches[0].clientY - e.touches[1].clientY;
+            pinchDistanceRef.current = Math.sqrt(dx * dx + dy * dy);
+            initialScaleRef.current = scale;
+        }
+    };
+
+    const handleTouchMove = (e: React.TouchEvent) => {
+        // 1 Finger Rotate
+        if (e.touches.length === 1 && touchStartRef.current) {
+            const deltaX = e.touches[0].clientX - touchStartRef.current.x;
+            const newY = initialRotationRef.current + (deltaX * 0.5); 
+            setRotation(prev => ({ ...prev, y: newY }));
+        } 
+        // 2 Finger Pinch
+        else if (e.touches.length === 2 && pinchDistanceRef.current) {
+            const dx = e.touches[0].clientX - e.touches[1].clientX;
+            const dy = e.touches[0].clientY - e.touches[1].clientY;
+            const newDist = Math.sqrt(dx * dx + dy * dy);
+            const scaleFactor = newDist / pinchDistanceRef.current;
+            const newScale = Math.max(0.1, Math.min(5, initialScaleRef.current * scaleFactor));
+            setScale(newScale);
+        }
+    };
+
+    const handleTouchEnd = () => {
+        touchStartRef.current = null;
+        pinchDistanceRef.current = null;
+    };
+
+    // --- 6. File Loading (Fixed Normalization) ---
     const handleReset = () => {
         setScale(1);
         setRotation({ x: 0, y: 0, z: 0 });
     };
 
-    // --- 5. File Import Logic ---
     const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0];
         if (!file || !sceneRef.current) return;
+        setLoading(true); setError(null);
 
-        setLoading(true);
-        setError(null);
-        
-        // Clean up previous model
-        if (modelRef.current && sceneRef.current) {
+        // Remove old model safely
+        if (modelRef.current) {
             sceneRef.current.remove(modelRef.current);
-            modelRef.current.traverse((child) => {
-                 if (child instanceof THREE.Mesh) {
-                     child.geometry.dispose();
-                     if (Array.isArray(child.material)) (child.material as THREE.Material[]).forEach(m => m.dispose());
-                     else (child.material as THREE.Material).dispose();
-                 }
+            // Deep dispose to free memory
+            modelRef.current.traverse((obj) => {
+                if ((obj as THREE.Mesh).isMesh) {
+                    (obj as THREE.Mesh).geometry.dispose();
+                    const mat = (obj as THREE.Mesh).material;
+                    if (Array.isArray(mat)) mat.forEach(m => m.dispose());
+                    else (mat as THREE.Material).dispose();
+                }
             });
             modelRef.current = null;
         }
 
         const reader = new FileReader();
-
         reader.onload = (e) => {
             const contents = e.target?.result;
-            if (!contents) {
-                setError("Failed to read file.");
-                setLoading(false);
-                return;
-            }
+            if (!contents) { setLoading(false); return; }
 
-            // HELPER: Normalize size, center position, add to scene
-            const processAndAddModel = (object: THREE.Object3D) => {
-                const box = new THREE.Box3().setFromObject(object);
+            // Helper to center and scale
+            const processModel = (obj: THREE.Object3D) => {
+                const box = new THREE.Box3().setFromObject(obj);
                 const size = box.getSize(new THREE.Vector3());
                 const center = box.getCenter(new THREE.Vector3());
+
+                // Center X/Z, Sit on Y=0
+                obj.position.set(-center.x, -box.min.y, -center.z);
                 
-                // 1. Center the model on X/Z, make bottom touch Y=0
-                object.position.x = -center.x;
-                object.position.y = -box.min.y;
-                object.position.z = -center.z;
-                
-                // 2. Wrap in a parent group for clean rotation
+                // Shadows
+                obj.traverse(c => {
+                    if ((c as THREE.Mesh).isMesh) {
+                        c.castShadow = true;
+                        c.receiveShadow = true;
+                        // Fix for dark models: ensure material interacts with light
+                        const mat = (c as THREE.Mesh).material as THREE.MeshStandardMaterial;
+                        if(mat && mat.map) mat.map.colorSpace = THREE.SRGBColorSpace;
+                    }
+                });
+
                 const group = new THREE.Group();
-                group.add(object);
+                group.add(obj);
 
-                // 3. Scale to fit nicely in view (approx 3 units wide)
+                // Auto-scale to ~2 units
                 const maxDim = Math.max(size.x, size.y, size.z);
-                const scaleFactor = 3 / (maxDim || 1); 
-                group.scale.set(scaleFactor, scaleFactor, scaleFactor);
-                
-                modelRef.current = group;
+                const scaleF = 2 / (maxDim || 1);
+                group.scale.set(scaleF, scaleF, scaleF);
+
                 sceneRef.current!.add(group);
+                modelRef.current = group;
                 
-                handleReset();
+                setLoading(false);
                 setModelLoaded(true);
-                setLoading(false);
-                toast({
-                    title: "Model Loaded",
-                    description: `Successfully loaded ${file.name}.`,
-                });
+                handleReset();
+                toast({ title: "Success", description: "Model loaded successfully" });
             };
 
-            // HELPER: Create standard mesh for raw geometry formats (STL/PLY)
-            const createMeshFromGeometry = (geometry: THREE.BufferGeometry) => {
-                const material = new THREE.MeshStandardMaterial({ 
-                    color: 0xcccccc, 
-                    roughness: 0.5,
-                    metalness: 0.5 
-                });
-                return new THREE.Mesh(geometry, material);
-            };
-            
-            const onModelError = (err: unknown) => {
-                console.error("Error loading model: ", err);
-                setError("Failed to load 3D model. The file might be corrupted.");
-                setLoading(false);
-            };
+            const onError = () => { setLoading(false); setError("Failed to parse file"); };
 
-            const fileName = file.name.toLowerCase();
-            const fileBuffer = contents as ArrayBuffer;
-
-            // --- LOADER SWITCH ---
             try {
-                if (fileName.endsWith('.glb') || fileName.endsWith('.gltf')) {
-                    const loader = new GLTFLoader();
-                    loader.parse(fileBuffer, '', (gltf: GLTF) => processAndAddModel(gltf.scene), onModelError);
-                
-                } else if (fileName.endsWith('.fbx')) {
-                    const loader = new FBXLoader();
-                    // FBXLoader parses directly to Group
-                    const model = loader.parse(fileBuffer, '');
-                    processAndAddModel(model);
-                
-                } else if (fileName.endsWith('.obj')) {
-                    // OBJ expects a string string, not ArrayBuffer
-                    const text = new TextDecoder().decode(fileBuffer);
-                    const loader = new OBJLoader();
-                    const model = loader.parse(text);
-                    processAndAddModel(model);
+                const buff = contents as ArrayBuffer;
+                const name = file.name.toLowerCase();
 
-                } else if (fileName.endsWith('.stl')) {
-                    const loader = new STLLoader();
-                    const geometry = loader.parse(fileBuffer);
-                    processAndAddModel(createMeshFromGeometry(geometry));
-
-                } else if (fileName.endsWith('.ply')) {
-                    const loader = new PLYLoader();
-                    const geometry = loader.parse(fileBuffer);
-                    geometry.computeVertexNormals(); // PLY often needs normals recalculating
-                    processAndAddModel(createMeshFromGeometry(geometry));
-                
-                } else {
-                    setError("Unsupported file format. Supported: .gltf, .glb, .fbx, .obj, .stl, .ply");
-                    setLoading(false);
+                if (name.endsWith('.glb') || name.endsWith('.gltf')) {
+                    new GLTFLoader().parse(buff, '', (gltf) => processModel(gltf.scene), onError);
+                } else if (name.endsWith('.fbx')) {
+                    const obj = new FBXLoader().parse(buff, '');
+                    processModel(obj);
+                } else if (name.endsWith('.obj')) {
+                    const txt = new TextDecoder().decode(buff);
+                    const obj = new OBJLoader().parse(txt);
+                    processModel(obj);
+                } else if (name.endsWith('.stl')) {
+                    const geo = new STLLoader().parse(buff);
+                    processModel(new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: 0x999999 })));
+                } else if (name.endsWith('.ply')) {
+                    const geo = new PLYLoader().parse(buff);
+                    geo.computeVertexNormals();
+                    processModel(new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: 0x999999 })));
                 }
-            } catch (err) {
-                onModelError(err);
-            }
+            } catch (err) { onError(); }
         };
-
-        reader.onerror = () => {
-             setError("Error reading file.");
-             setLoading(false);
-        }
-
         reader.readAsArrayBuffer(file);
     };
 
-    // --- 6. Screenshot Logic ---
+    // --- 7. Screenshot ---
     const handleScreenshot = () => {
-        if (!videoRef.current || !canvasRef.current || !rendererRef.current || !sceneRef.current || !cameraRef.current) return;
-        
-        // Force one final render
+        if (!rendererRef.current || !sceneRef.current || !cameraRef.current) return;
         rendererRef.current.render(sceneRef.current, cameraRef.current);
+        const canvas = canvasRef.current!;
+        
+        // Create composite
+        const composite = document.createElement('canvas');
+        composite.width = canvas.width;
+        composite.height = canvas.height;
+        const ctx = composite.getContext('2d');
+        if (!ctx) return;
 
-        const video = videoRef.current;
-        const arCanvas = canvasRef.current;
-        
-        const tempCanvas = document.createElement('canvas');
-        tempCanvas.width = arCanvas.width;
-        tempCanvas.height = arCanvas.height;
-        
-        const ctx = tempCanvas.getContext('2d');
-        if (!ctx) {
-            setError("Could not create image for capture.");
-            return;
+        // Draw video (Background)
+        if (videoRef.current) {
+            const v = videoRef.current;
+            const vRatio = v.videoWidth / v.videoHeight;
+            const cRatio = canvas.width / canvas.height;
+            let dw, dh, dx, dy;
+            if (vRatio > cRatio) {
+                dh = canvas.height; dw = dh * vRatio; dx = (canvas.width - dw) / 2; dy = 0;
+            } else {
+                dw = canvas.width; dh = dw / vRatio; dy = (canvas.height - dh) / 2; dx = 0;
+            }
+            ctx.drawImage(v, dx, dy, dw, dh);
         }
-        
-        // Calculate "object-fit: cover" coordinates for the video frame
-        const videoAspectRatio = video.videoWidth / video.videoHeight;
-        const canvasAspectRatio = tempCanvas.width / tempCanvas.height;
-        let renderWidth, renderHeight, xStart, yStart;
 
-        if (videoAspectRatio > canvasAspectRatio) {
-            renderHeight = tempCanvas.height;
-            renderWidth = renderHeight * videoAspectRatio;
-            xStart = (tempCanvas.width - renderWidth) / 2;
-            yStart = 0;
-        } else {
-            renderWidth = tempCanvas.width;
-            renderHeight = renderWidth / videoAspectRatio;
-            yStart = (tempCanvas.height - renderHeight) / 2;
-            xStart = 0;
-        }
-        
-        // 1. Draw Video
-        ctx.drawImage(video, xStart, yStart, renderWidth, renderHeight);
-        // 2. Draw 3D Model
-        ctx.drawImage(arCanvas, 0, 0);
-        
-        // 3. Download
+        // Draw 3D (Foreground)
+        ctx.drawImage(canvas, 0, 0);
+
         const link = document.createElement('a');
         link.download = `AR_Capture_${Date.now()}.png`;
-        link.href = tempCanvas.toDataURL('image/png');
+        link.href = composite.toDataURL('image/png');
         link.click();
     };
 
     return (
-        <div className="relative h-full w-full bg-black overflow-hidden">
-            {/* Camera Feed */}
+        <div 
+            ref={containerRef}
+            className="relative h-full w-full bg-black overflow-hidden"
+            style={{ touchAction: 'none' }} // Prevents browser scroll on drag
+            onTouchStart={handleTouchStart}
+            onTouchMove={handleTouchMove}
+            onTouchEnd={handleTouchEnd}
+        >
+            {/* Background Video */}
             <video 
                 ref={videoRef} 
-                className="absolute top-0 left-0 h-full w-full object-cover z-0" 
-                playsInline 
-                muted 
-                autoPlay 
+                className="absolute top-0 left-0 h-full w-full object-cover z-0 pointer-events-none" 
+                playsInline muted autoPlay 
             />
-            {/* AR Canvas */}
+            
+            {/* Three.js Canvas */}
             <canvas 
                 ref={canvasRef} 
                 className="absolute top-0 left-0 h-full w-full z-10 pointer-events-none" 
             />
-            
-            {/* Loading Indicator */}
+
+            {/* UI Overlays */}
             {loading && (
-                <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 flex items-center flex-col gap-2 bg-black/60 p-6 rounded-xl backdrop-blur-md border border-white/10">
-                    <Loader className="h-10 w-10 animate-spin text-primary" />
-                    <p className="text-white font-medium text-sm">Parsing 3D Model...</p>
+                <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 flex flex-col items-center gap-2 bg-black/70 p-4 rounded-lg backdrop-blur">
+                    <Loader className="animate-spin text-white" />
+                    <span className="text-white text-sm">Loading...</span>
                 </div>
             )}
 
-            {/* Error Message */}
             {error && (
-                 <div className="absolute top-4 left-4 right-4 z-50">
-                    <Alert variant="destructive" className="border-red-500/50 bg-red-950/50 text-red-200 backdrop-blur-md">
+                <div className="absolute top-4 left-4 right-4 z-50">
+                    <Alert variant="destructive" className="bg-red-950/80 border-red-500/50 text-red-100">
                         <AlertTriangle className="h-4 w-4" />
                         <AlertTitle>Error</AlertTitle>
                         <AlertDescription>{error}</AlertDescription>
@@ -398,13 +425,20 @@ export default function ARView() {
                 </div>
             )}
 
-            {/* UI Controls */}
-            <div className="relative z-40">
+            {/* Hint Text */}
+            {!modelLoaded && !loading && (
+                <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-white/50 text-sm pointer-events-none z-0">
+                    Import a model to start
+                </div>
+            )}
+
+            {/* Control Panel - Z-Index 40 to stay above video but below AR Button overlay if needed */}
+            <div className="relative z-40 pointer-events-auto">
                 <ControlPanel
                     onFileChange={handleFileChange}
                     onScreenshot={handleScreenshot}
                     onScaleChange={setScale}
-                    onRotationChange={(axis, value) => setRotation(prev => ({ ...prev, [axis]: value }))}
+                    onRotationChange={(axis, val) => setRotation(prev => ({...prev, [axis]: val}))}
                     onReset={handleReset}
                     scale={scale}
                     rotation={rotation}

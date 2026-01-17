@@ -1,7 +1,5 @@
-// src/types/three-examples.d.ts
-
 declare module 'three/examples/jsm/loaders/GLTFLoader' {
-    import { Loader, LoadingManager, Group, AnimationClip, Camera, Scene } from 'three';
+    import { Loader, LoadingManager, Group, AnimationClip, Camera } from 'three';
     
     export interface GLTF {
       scene: Group;
@@ -21,26 +19,39 @@ declare module 'three/examples/jsm/loaders/GLTFLoader' {
         onLoad: (gltf: GLTF) => void, 
         onError?: (event: ErrorEvent) => void
       ): void;
-      load(
-        url: string, 
-        onLoad: (gltf: GLTF) => void, 
-        onProgress?: (event: ProgressEvent) => void, 
-        onError?: (event: ErrorEvent) => void
-      ): void;
     }
   }
   
   declare module 'three/examples/jsm/loaders/FBXLoader' {
     import { Loader, LoadingManager, Group } from 'three';
-    
     export class FBXLoader extends Loader {
       constructor(manager?: LoadingManager);
       parse(data: ArrayBuffer | string, path: string): Group;
-      load(
-        url: string, 
-        onLoad: (object: Group) => void, 
-        onProgress?: (event: ProgressEvent) => void, 
-        onError?: (event: ErrorEvent) => void
-      ): void;
+    }
+  }
+  
+  // --- NEW LOADERS ---
+  
+  declare module 'three/examples/jsm/loaders/OBJLoader' {
+    import { Loader, LoadingManager, Group } from 'three';
+    export class OBJLoader extends Loader {
+      constructor(manager?: LoadingManager);
+      parse(data: string): Group; // OBJLoader parses text, not ArrayBuffer
+    }
+  }
+  
+  declare module 'three/examples/jsm/loaders/STLLoader' {
+    import { Loader, LoadingManager, BufferGeometry } from 'three';
+    export class STLLoader extends Loader {
+      constructor(manager?: LoadingManager);
+      parse(data: ArrayBuffer): BufferGeometry;
+    }
+  }
+  
+  declare module 'three/examples/jsm/loaders/PLYLoader' {
+    import { Loader, LoadingManager, BufferGeometry } from 'three';
+    export class PLYLoader extends Loader {
+      constructor(manager?: LoadingManager);
+      parse(data: ArrayBuffer): BufferGeometry;
     }
   }

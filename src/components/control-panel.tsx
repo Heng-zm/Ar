@@ -7,7 +7,6 @@ import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Upload, Camera, Scaling, Rotate3d, RotateCw, Settings2 } from "lucide-react";
-import { cn } from "@/lib/utils";
 
 type ControlPanelProps = {
   onFileChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
@@ -49,8 +48,9 @@ export default function ControlPanel({
   const axisLabels = ['x', 'y', 'z'] as const;
 
   return (
-    <div className="absolute bottom-4 right-4 z-20 w-full max-w-[320px] transition-all duration-300">
-      <Card className="bg-black/60 backdrop-blur-md border-white/10 shadow-2xl text-white">
+    // Container: Positioned bottom-right, max width limited for mobile screens
+    <div className="absolute bottom-4 right-4 z-20 w-full max-w-[320px] transition-all duration-300 pb-safe">
+      <Card className="bg-black/70 backdrop-blur-md border-white/10 shadow-2xl text-white overflow-hidden">
         <CardContent className="p-0">
           <Accordion 
             type="single" 
@@ -59,39 +59,46 @@ export default function ControlPanel({
             onValueChange={setActiveTab}
             className="w-full"
           >
-            {/* --- File Actions Section --- */}
+            {/* --- SECTION 1: File Actions --- */}
             <AccordionItem value="item-1" className="border-b-white/10 px-4">
               <AccordionTrigger className="hover:no-underline py-3 text-sm font-semibold">
                 <span className="flex items-center gap-2">
-                    <Settings2 className="h-4 w-4 text-blue-400" /> 
+                    <Settings2 className="h-4 w-4 text-primary" /> 
                     Menu & Actions
                 </span>
               </AccordionTrigger>
-              <AccordionContent className="space-y-3 pb-4">
+              <AccordionContent className="space-y-3 pb-4 pt-1">
                 <input
                   type="file"
                   ref={fileInputRef}
                   onChange={onFileChange}
-                  accept=".glb,.gltf,.fbx"
+                  // Updated to support all implemented formats
+                  accept=".glb,.gltf,.fbx,.obj,.stl,.ply"
                   className="hidden"
                 />
+                
                 <Button 
                     onClick={handleImportClick} 
-                    className="w-full bg-white/10 hover:bg-white/20 text-white border-0"
+                    className="w-full bg-white/10 hover:bg-white/20 text-white border-0 transition-colors"
                     variant="outline"
                 >
                   <Upload className="mr-2 h-4 w-4" /> Import Model
                 </Button>
+                
                 <Button 
                     onClick={onScreenshot} 
-                    className="w-full bg-blue-600 hover:bg-blue-700 text-white border-0"
+                    className="w-full bg-primary hover:bg-primary/90 text-primary-foreground border-0 transition-colors"
                 >
                   <Camera className="mr-2 h-4 w-4" /> Capture Scene
                 </Button>
+
+                <p className="text-[10px] text-center text-white/40 pt-1">
+                  Supports: .glb, .gltf, .fbx, .obj, .stl, .ply
+                </p>
               </AccordionContent>
             </AccordionItem>
 
-            {/* --- Transform Section (Only visible if loaded) --- */}
+            {/* --- SECTION 2: Transform (Only visible if loaded) --- */}
             {modelLoaded && (
               <AccordionItem value="item-2" className="border-b-0 px-4">
                 <AccordionTrigger className="hover:no-underline py-3 text-sm font-semibold">
@@ -100,7 +107,7 @@ export default function ControlPanel({
                         Transform Model
                     </span>
                 </AccordionTrigger>
-                <AccordionContent className="space-y-5 pb-4">
+                <AccordionContent className="space-y-5 pb-4 pt-1">
                   
                   {/* Scale Control */}
                   <div className="space-y-3">
@@ -108,7 +115,7 @@ export default function ControlPanel({
                         <Label htmlFor="scale" className="flex items-center text-xs text-gray-300 font-medium">
                         <Scaling className="mr-2 h-3 w-3" /> Scale
                         </Label>
-                        <span className="text-xs font-mono text-blue-300">{scale.toFixed(2)}x</span>
+                        <span className="text-xs font-mono text-primary">{scale.toFixed(2)}x</span>
                     </div>
                     <Slider
                       id="scale"
@@ -121,9 +128,9 @@ export default function ControlPanel({
                     />
                   </div>
 
-                  {/* Rotation Controls (Mapped) */}
+                  {/* Rotation Controls (Loop for DRY code) */}
                   <div className="space-y-4">
-                    <Label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Rotation</Label>
+                    <Label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Rotation</Label>
                     
                     {axisLabels.map((axis) => (
                         <div key={axis} className="space-y-2">
@@ -148,11 +155,12 @@ export default function ControlPanel({
                     ))}
                   </div>
 
+                  {/* Reset Button */}
                   <Button 
                     onClick={onReset} 
                     variant="ghost" 
                     size="sm"
-                    className="w-full text-xs text-gray-400 hover:text-white hover:bg-white/10"
+                    className="w-full text-xs text-gray-400 hover:text-white hover:bg-white/10 mt-2"
                   >
                     <RotateCw className="mr-2 h-3 w-3" /> Reset Position
                   </Button>

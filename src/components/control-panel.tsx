@@ -1,3 +1,4 @@
+
 "use client";
 
 import React, { useRef } from 'react';
@@ -6,13 +7,14 @@ import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
-import { Upload, Camera, Scaling, Rotate3d } from "lucide-react";
+import { Upload, Camera, Scaling, Rotate3d, RotateCw } from "lucide-react";
 
 type ControlPanelProps = {
   onFileChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
   onScreenshot: () => void;
   onScaleChange: (value: number) => void;
   onRotationChange: (axis: 'x' | 'y' | 'z', value: number) => void;
+  onReset: () => void;
   scale: number;
   rotation: { x: number; y: number; z: number };
   modelLoaded: boolean;
@@ -23,6 +25,7 @@ export default function ControlPanel({
   onScreenshot,
   onScaleChange,
   onRotationChange,
+  onReset,
   scale,
   rotation,
   modelLoaded,
@@ -113,6 +116,9 @@ export default function ControlPanel({
                         </div>
                     </div>
                   </div>
+                  <Button onClick={onReset} variant="outline" className="w-full">
+                    <RotateCw className="mr-2 h-4 w-4" /> Reset Transform
+                  </Button>
                 </AccordionContent>
               </AccordionItem>
             )}

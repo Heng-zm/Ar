@@ -1,3 +1,4 @@
+
 "use client";
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
@@ -7,6 +8,7 @@ import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader';
 import ControlPanel from './control-panel';
 import { Loader, AlertTriangle } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { useToast } from '@/hooks/use-toast';
 
 export default function ARView() {
     const videoRef = useRef<HTMLVideoElement>(null);
@@ -23,29 +25,41 @@ export default function ARView() {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [cameraReady, setCameraReady] = useState(false);
+    const { toast } = useToast();
 
     const onResize = useCallback(() => {
-        if (cameraRef.current && rendererRef.current) {
-            const width = window.innerWidth;
-            const height = window.innerHeight;
-            cameraRef.current.aspect = width / height;
+        if (cameraRef.current && rendererRef.current && videoRef.current) {
+            const displayWidth = videoRef.current.clientWidth;
+            const displayHeight = videoRef.current.clientHeight;
+
+            rendererRef.current.setSize(displayWidth, displayHeight);
+            cameraRef.current.aspect = displayWidth / displayHeight;
             cameraRef.current.updateProjectionMatrix();
-            rendererRef.current.setSize(width, height);
         }
     }, []);
 
     useEffect(() => {
         const initCamera = async () => {
             try {
-                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+                let stream;
+                try {
+                    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+                } catch (e) {
+                    console.info("Could not get environment camera, trying default.", e);
+                    stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                }
+                
                 if (videoRef.current) {
                     videoRef.current.srcObject = stream;
-                    await videoRef.current.play();
-                    setCameraReady(true);
+                    videoRef.current.onloadedmetadata = () => {
+                        videoRef.current?.play();
+                        setCameraReady(true);
+                        onResize();
+                    };
                 }
             } catch (err) {
                 console.error("Error accessing camera: ", err);
-                setError("Could not access the camera. Please check permissions and try again.");
+                setError("Could not access the camera. Please check permissions and try again. Ensure a camera is available.");
             }
         };
         initCamera();
@@ -74,7 +88,6 @@ export default function ARView() {
             cameraRef.current = camera;
             
             const renderer = new THREE.WebGLRenderer({ canvas: canvasRef.current, alpha: true, antialias: true });
-            renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.setPixelRatio(window.devicePixelRatio);
             rendererRef.current = renderer;
             
@@ -86,7 +99,9 @@ export default function ARView() {
             scene.add(directionalLight);
             
             const animate = () => {
-                renderer.render(scene, camera);
+                if (rendererRef.current && sceneRef.current && cameraRef.current) {
+                    rendererRef.current.render(sceneRef.current, cameraRef.current);
+                }
                 requestRef.current = requestAnimationFrame(animate);
             };
             animate();
@@ -105,6 +120,11 @@ export default function ARView() {
         }
     }, [scale, rotation]);
 
+    const handleReset = () => {
+        setScale(1);
+        setRotation({ x: 0, y: 0, z: 0 });
+    };
+
     const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0];
         if (!file || !sceneRef.current) return;
@@ -114,14 +134,14 @@ export default function ARView() {
         
         if (modelRef.current && sceneRef.current) {
             sceneRef.current.remove(modelRef.current);
-            modelRef.current = null;
+            modelRef.current.clear();
         }
 
         const reader = new FileReader();
 
         reader.onload = (e) => {
             const contents = e.target?.result;
-            if (!(contents instanceof ArrayBuffer)) {
+            if (!contents) {
                 setError("Failed to read file.");
                 setLoading(false);
                 return;
@@ -142,10 +162,13 @@ export default function ARView() {
                 modelRef.current = model;
                 sceneRef.current!.add(model);
                 
-                setScale(1);
-                setRotation({x:0, y:0, z:0});
+                handleReset();
                 setModelLoaded(true);
                 setLoading(false);
+                toast({
+                    title: "Model Loaded",
+                    description: `Successfully loaded ${file.name}.`,
+                });
             };
             
             const onModelError = (err: any) => {
@@ -155,14 +178,15 @@ export default function ARView() {
             };
 
             const fileName = file.name.toLowerCase();
+            const fileBuffer = contents as ArrayBuffer;
 
             if (fileName.endsWith('.glb') || fileName.endsWith('.gltf')) {
                 const loader = new GLTFLoader();
-                loader.parse(contents, '', (gltf) => onModelLoad(gltf.scene), onModelError);
+                loader.parse(fileBuffer, '', (gltf) => onModelLoad(gltf.scene), onModelError);
             } else if (fileName.endsWith('.fbx')) {
                 const loader = new FBXLoader();
                 try {
-                    const model = loader.parse(contents, '');
+                    const model = loader.parse(fileBuffer, '');
                     onModelLoad(model);
                 } catch (err) {
                     onModelError(err);
@@ -189,8 +213,8 @@ export default function ARView() {
         const arCanvas = canvasRef.current;
         
         const tempCanvas = document.createElement('canvas');
-        tempCanvas.width = video.videoWidth;
-        tempCanvas.height = video.videoHeight;
+        tempCanvas.width = arCanvas.clientWidth;
+        tempCanvas.height = arCanvas.clientHeight;
         
         const ctx = tempCanvas.getContext('2d');
         if (!ctx) {
@@ -198,8 +222,24 @@ export default function ARView() {
             return;
         }
         
-        ctx.drawImage(video, 0, 0, video.videoWidth, video.videoHeight);
-        ctx.drawImage(arCanvas, 0, 0, arCanvas.width, arCanvas.height, 0, 0, video.videoWidth, video.videoHeight);
+        const videoAspectRatio = video.videoWidth / video.videoHeight;
+        const canvasAspectRatio = tempCanvas.width / tempCanvas.height;
+        let renderWidth, renderHeight, xStart, yStart;
+
+        if (videoAspectRatio > canvasAspectRatio) {
+            renderHeight = tempCanvas.height;
+            renderWidth = renderHeight * videoAspectRatio;
+            xStart = (tempCanvas.width - renderWidth) / 2;
+            yStart = 0;
+        } else {
+            renderWidth = tempCanvas.width;
+            renderHeight = renderWidth / videoAspectRatio;
+            yStart = (tempCanvas.height - renderHeight) / 2;
+            xStart = 0;
+        }
+        
+        ctx.drawImage(video, xStart, yStart, renderWidth, renderHeight);
+        ctx.drawImage(arCanvas, 0, 0, tempCanvas.width, tempCanvas.height);
         
         const link = document.createElement('a');
         link.download = 'ARchitect_scene.png';
@@ -209,7 +249,7 @@ export default function ARView() {
 
     return (
         <div className="relative h-full w-full bg-black">
-            <video ref={videoRef} className="absolute top-0 left-0 h-full w-full object-cover z-0" playsInline />
+            <video ref={videoRef} className="absolute top-0 left-0 h-full w-full object-cover z-0" playsInline muted />
             <canvas ref={canvasRef} className="absolute top-0 left-0 h-full w-full z-1" />
             
             {loading && (
@@ -234,6 +274,7 @@ export default function ARView() {
                 onScreenshot={handleScreenshot}
                 onScaleChange={setScale}
                 onRotationChange={(axis, value) => setRotation(prev => ({ ...prev, [axis]: value }))}
+                onReset={handleReset}
                 scale={scale}
                 rotation={rotation}
                 modelLoaded={modelLoaded}

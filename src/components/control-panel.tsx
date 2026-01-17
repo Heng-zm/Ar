@@ -45,7 +45,7 @@ export default function ControlPanel({
                   type="file"
                   ref={fileInputRef}
                   onChange={onFileChange}
-                  accept=".glb,.gltf"
+                  accept=".glb,.gltf,.fbx"
                   className="hidden"
                 />
                 <Button onClick={handleImportClick} className="w-full">

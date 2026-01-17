@@ -3,6 +3,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
+import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader';
 import ControlPanel from './control-panel';
 import { Loader, AlertTriangle } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -111,12 +112,11 @@ export default function ARView() {
         setLoading(true);
         setError(null);
         
-        if (modelRef.current) {
+        if (modelRef.current && sceneRef.current) {
             sceneRef.current.remove(modelRef.current);
             modelRef.current = null;
         }
 
-        const loader = new GLTFLoader();
         const reader = new FileReader();
 
         reader.onload = (e) => {
@@ -126,8 +126,9 @@ export default function ARView() {
                 setLoading(false);
                 return;
             }
-            loader.parse(contents, '', (gltf) => {
-                const model = gltf.scene;
+
+            const onModelLoad = (object: THREE.Group) => {
+                const model = object;
                 
                 const box = new THREE.Box3().setFromObject(model);
                 const size = box.getSize(new THREE.Vector3()).length();
@@ -145,11 +146,32 @@ export default function ARView() {
                 setRotation({x:0, y:0, z:0});
                 setModelLoaded(true);
                 setLoading(false);
-            }, (err) => {
+            };
+            
+            const onModelError = (err: any) => {
                 console.error("Error loading model: ", err);
                 setError("Failed to load 3D model. The file might be corrupted or in an unsupported format.");
                 setLoading(false);
-            });
+            };
+
+            const fileName = file.name.toLowerCase();
+
+            if (fileName.endsWith('.glb') || fileName.endsWith('.gltf')) {
+                const loader = new GLTFLoader();
+                loader.parse(contents, '', (gltf) => onModelLoad(gltf.scene), onModelError);
+            } else if (fileName.endsWith('.fbx')) {
+                const loader = new FBXLoader();
+                try {
+                    const model = loader.parse(contents, '');
+                    onModelLoad(model);
+                } catch (err) {
+                    onModelError(err);
+                }
+            } else {
+                setError("Unsupported file format. Please use .gltf, .glb, or .fbx");
+                setLoading(false);
+                return;
+            }
         };
         reader.onerror = () => {
              setError("Error reading file.");

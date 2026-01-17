@@ -30,11 +30,9 @@ export default function ControlPanel({
   modelLoaded,
 }: ControlPanelProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
-  
-  // State to control which accordion item is open
   const [activeTab, setActiveTab] = useState<string>("item-1");
 
-  // Automatically switch to Transform tab when a model loads
+  // Auto-expand transforms when loaded
   useEffect(() => {
     if (modelLoaded) {
       setActiveTab("item-2");
@@ -48,8 +46,11 @@ export default function ControlPanel({
   const axisLabels = ['x', 'y', 'z'] as const;
 
   return (
-    <div className="absolute bottom-4 right-4 z-20 w-full max-w-[320px] transition-all duration-300 pb-safe">
-      <Card className="bg-[#18181B]/90 backdrop-blur-md border-white/5 shadow-2xl text-white overflow-hidden">
+    // Wrapper positioned at bottom-right
+    // pointer-events-auto is CRITICAL here so buttons work
+    // pb-safe handles iPhone Home Indicator area
+    <div className="absolute bottom-6 right-4 w-full max-w-[320px] pointer-events-auto pb-safe transition-all duration-300">
+      <Card className="bg-[#18181B]/95 backdrop-blur-xl border-white/10 shadow-2xl text-white overflow-hidden rounded-xl">
         <CardContent className="p-0">
           <Accordion 
             type="single" 
@@ -59,9 +60,9 @@ export default function ControlPanel({
             className="w-full"
           >
             {/* --- SECTION 1: File Actions --- */}
-            <AccordionItem value="item-1" className="border-b-white/5 px-4">
-              <AccordionTrigger className="hover:no-underline py-4 text-base font-medium text-white">
-                File Actions
+            <AccordionItem value="item-1" className="border-b-white/10 px-4">
+              <AccordionTrigger className="hover:no-underline py-4 text-sm font-medium text-white">
+                Menu & Actions
               </AccordionTrigger>
               <AccordionContent className="space-y-3 pb-5 pt-1">
                 <input
@@ -72,41 +73,46 @@ export default function ControlPanel({
                   className="hidden"
                 />
                 
-                {/* Primary Action: Import Model (Cyan) */}
+                {/* Primary: Import */}
                 <Button 
                     onClick={handleImportClick} 
-                    className="w-full h-12 bg-primary hover:bg-primary/90 text-primary-foreground border-0 font-medium text-base rounded-md transition-all shadow-lg shadow-primary/20"
+                    className="w-full h-11 bg-primary hover:bg-primary/90 text-primary-foreground border-0 font-medium rounded-lg shadow-lg shadow-primary/10"
                 >
                   <Upload className="mr-2 h-4 w-4" /> Import Model
                 </Button>
                 
-                {/* Secondary Action: Capture Scene (Dark Gray) */}
+                {/* Secondary: Screenshot */}
                 <Button 
                     onClick={onScreenshot} 
-                    className="w-full h-12 bg-[#27272A] hover:bg-[#3F3F46] text-white border-0 font-medium text-base rounded-md transition-all"
+                    className="w-full h-11 bg-white/5 hover:bg-white/10 text-white border-0 font-medium rounded-lg"
                 >
                   <Camera className="mr-2 h-4 w-4" /> Capture Scene
                 </Button>
+                
+                <p className="text-[10px] text-center text-white/30 pt-1">
+                  Supports: .gltf, .glb, .fbx, .obj, .stl, .ply
+                </p>
               </AccordionContent>
             </AccordionItem>
 
-            {/* --- SECTION 2: Transform (Only visible if loaded) --- */}
+            {/* --- SECTION 2: Transforms (Visible when Loaded) --- */}
             {modelLoaded && (
               <AccordionItem value="item-2" className="border-b-0 px-4">
-                <AccordionTrigger className="hover:no-underline py-4 text-base font-medium text-white">
+                <AccordionTrigger className="hover:no-underline py-4 text-sm font-medium text-white">
                     <span className="flex items-center gap-2">
+                        <Rotate3d className="h-4 w-4 text-primary" /> 
                         Transform Model
                     </span>
                 </AccordionTrigger>
                 <AccordionContent className="space-y-6 pb-5 pt-1">
                   
-                  {/* Scale Control */}
+                  {/* Scale */}
                   <div className="space-y-3">
                     <div className="flex justify-between items-center">
                         <Label htmlFor="scale" className="flex items-center text-xs text-gray-400 font-medium uppercase tracking-wider">
                           <Scaling className="mr-1.5 h-3 w-3" /> Scale
                         </Label>
-                        <span className="text-xs font-mono text-primary bg-primary/10 px-2 py-0.5 rounded">{scale.toFixed(2)}x</span>
+                        <span className="text-xs font-mono text-primary bg-primary/10 px-1.5 py-0.5 rounded">{scale.toFixed(2)}x</span>
                     </div>
                     <Slider
                       id="scale"
@@ -119,17 +125,15 @@ export default function ControlPanel({
                     />
                   </div>
 
-                  {/* Rotation Controls */}
-                  <div className="space-y-5">
-                    <Label className="text-xs font-bold text-gray-500 uppercase tracking-widest block mb-2">Rotation</Label>
-                    
+                  {/* Rotation */}
+                  <div className="space-y-4">
                     {axisLabels.map((axis) => (
                         <div key={axis} className="space-y-2">
                             <div className="flex justify-between items-center">
                                 <Label htmlFor={`rotate-${axis}`} className="text-xs text-gray-400 uppercase font-medium">
                                     {axis}-Axis
                                 </Label>
-                                <span className="text-xs font-mono text-white/70">
+                                <span className="text-xs font-mono text-white/60">
                                     {Math.round(rotation[axis])}°
                                 </span>
                             </div>
@@ -146,12 +150,12 @@ export default function ControlPanel({
                     ))}
                   </div>
 
-                  {/* Reset Button */}
+                  {/* Reset */}
                   <Button 
                     onClick={onReset} 
                     variant="ghost" 
                     size="sm"
-                    className="w-full h-10 text-xs text-gray-400 hover:text-white hover:bg-white/10 mt-2"
+                    className="w-full h-9 text-xs text-gray-500 hover:text-white hover:bg-white/5 mt-2"
                   >
                     <RotateCw className="mr-2 h-3 w-3" /> Reset Position
                   </Button>
